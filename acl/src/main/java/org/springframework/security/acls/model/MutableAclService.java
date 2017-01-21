@@ -58,4 +58,6 @@ public interface MutableAclService extends AclService {
 	 * than creating it with the <code>new</code> keyword?)
 	 */
 	MutableAcl updateAcl(MutableAcl acl) throws NotFoundException;
+
+	void deleteEntriesForSid(Sid var1, Sid var2);
 }

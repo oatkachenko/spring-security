@@ -14,33 +14,23 @@
  * limitations under the License.
  */
 package org.springframework.security.acls.jdbc;
-
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.util.List;
-
-import javax.sql.DataSource;
-
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.security.acls.domain.AccessControlEntryImpl;
 import org.springframework.security.acls.domain.GrantedAuthoritySid;
 import org.springframework.security.acls.domain.ObjectIdentityImpl;
 import org.springframework.security.acls.domain.PrincipalSid;
-import org.springframework.security.acls.model.AccessControlEntry;
-import org.springframework.security.acls.model.Acl;
-import org.springframework.security.acls.model.AclCache;
-import org.springframework.security.acls.model.AlreadyExistsException;
-import org.springframework.security.acls.model.ChildrenExistException;
-import org.springframework.security.acls.model.MutableAcl;
-import org.springframework.security.acls.model.MutableAclService;
-import org.springframework.security.acls.model.NotFoundException;
-import org.springframework.security.acls.model.ObjectIdentity;
-import org.springframework.security.acls.model.Sid;
+import org.springframework.security.acls.model.*;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.Assert;
+
+import javax.sql.DataSource;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.util.List;
 
 /**
  * Provides a base JDBC implementation of {@link MutableAclService}.
@@ -83,6 +73,10 @@ public class JdbcMutableAclService extends JdbcAclService implements MutableAclS
 	private String updateObjectIdentity = "update acl_object_identity set "
 			+ "parent_object = ?, owner_sid = ?, entries_inheriting = ?"
 			+ " where id = ?";
+	private String deleteSidByPK = "DELETE sid.* FROM acl_sid sid WHERE sid.id=?";
+	private String deleteEntryBySidForeignKey = "DELETE FROM acl_entry USING acl_entry JOIN acl_sid ON acl_entry.sid = acl_sid.id WHERE acl_sid.sid = ?";
+	private String updateObjectIdentityOwnerBySid = "UPDATE acl_object_identity SET owner_sid=?  WHERE owner_sid =?";
+
 
 	// ~ Constructors
 	// ===================================================================================================
@@ -365,6 +359,41 @@ public class JdbcMutableAclService extends JdbcAclService implements MutableAclS
 		// Retrieve the ACL via superclass (ensures cache registration, proper retrieval
 		// etc)
 		return (MutableAcl) super.readAclById(acl.getObjectIdentity());
+	}
+
+	@Override
+	public void deleteEntriesForSid(Sid sid, Sid sidHeir) throws EmptyResultDataAccessException {
+		String sidId = getSidId(sid);
+		Long sidPK = createOrRetrieveSidPrimaryKey(sid, false);
+		Long sidHeirPK = createOrRetrieveSidPrimaryKey(sidHeir, false);
+		if(sidPK != null && sidHeirPK != null) {
+			deleteEntryBySidId(sidId);
+			changeObjectIdentityOwnerBySidFK(sidPK, sidHeirPK);
+			deleteSidByPK(sidPK);
+			aclCache.clearCache();
+		}
+	}
+
+	protected String getSidId(Sid sid) {
+		if(sid instanceof PrincipalSid) {
+			return ((PrincipalSid)sid).getPrincipal();
+		} else if(sid instanceof GrantedAuthoritySid) {
+			return ((GrantedAuthoritySid)sid).getGrantedAuthority();
+		} else {
+			throw new IllegalArgumentException("Unsupported implementation of Sid");
+		}
+	}
+
+	private void deleteEntryBySidId(String sidId) {
+		this.jdbcTemplate.update(deleteEntryBySidForeignKey, sidId);
+	}
+
+	private void changeObjectIdentityOwnerBySidFK(long sidPK, long sidPKToSet) {
+		this.jdbcTemplate.update(updateObjectIdentityOwnerBySid, sidPKToSet, sidPK);
+	}
+
+	private void deleteSidByPK(long sidPK) {
+		this.jdbcTemplate.update(deleteSidByPK, sidPK);
 	}
 
 	private void clearCacheIncludingChildren(ObjectIdentity objectIdentity) {
